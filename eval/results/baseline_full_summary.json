@@ -1,0 +1,47 @@
+{
+  "questions": 50,
+  "in_scope": 44,
+  "out_of_scope": 6,
+  "retrieval": {
+    "all": {
+      "hit_rate": 100.0,
+      "top1_rate": 90.9,
+      "mrr": 0.955
+    },
+    "en": {
+      "hit_rate": 100.0,
+      "top1_rate": 90.9,
+      "mrr": 0.955
+    },
+    "ar": {
+      "hit_rate": 100.0,
+      "top1_rate": 90.9,
+      "mrr": 0.955
+    }
+  },
+  "errors": 0,
+  "answers": {
+    "all": {
+      "answer_rate": 100.0,
+      "citation_accuracy": 100.0,
+      "citation_precision": 95.7,
+      "refusal_accuracy": 100.0,
+      "avg_latency_seconds": 10.4
+    },
+    "en": {
+      "answer_rate": 100.0,
+      "citation_accuracy": 100.0,
+      "citation_precision": 91.7,
+      "refusal_accuracy": 100.0,
+      "avg_latency_seconds": 9.5
+    },
+    "ar": {
+      "answer_rate": 100.0,
+      "citation_accuracy": 100.0,
+      "citation_precision": 100.0,
+      "refusal_accuracy": 100.0,
+      "avg_latency_seconds": 11.3
+    }
+  },
+  "cross_lingual_agreement": 100.0
+}
