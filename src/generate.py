@@ -201,6 +201,16 @@ def answer_question(question: str, provider: LLMProvider | None = None) -> dict:
         log.warning("Dropped citations not in retrieved context: %s", sorted(dropped))
 
     found = result.found and bool(cited)
+
+    # The source text behind each cited article, so a UI can show it next to the answer.
+    # Chunks in the question's language come first.
+    sources = [
+        {"article_number": c["article_number"], "language": c["language"], "part": c["part"],
+         "text": c["text"], "similarity": round(float(c["similarity"]), 3)}
+        for c in sorted(chunks, key=lambda c: c["language"] != language)
+        if found and c["article_number"] in cited
+    ]
+
     output = {
         "question": question,
         "language": language,
@@ -208,6 +218,7 @@ def answer_question(question: str, provider: LLMProvider | None = None) -> dict:
         "cited_articles": cited if found else [],
         "found": found,
         "retrieved_articles": retrieved_articles,
+        "sources": sources,
         "provider": provider.name,
         "latency_seconds": round(time.time() - start, 2),
     }
