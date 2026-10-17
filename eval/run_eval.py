@@ -5,6 +5,7 @@ Usage (from the project root, with .venv active and the database running):
     python eval/run_eval.py --retrieval-only --label baseline     # search only: free, fast, no Gemini
     python eval/run_eval.py --label baseline                      # full pipeline with Gemini (~15 min)
     python eval/run_eval.py --label baseline --resume eval/results/baseline_full.jsonl
+    python eval/run_eval.py --questions eval/questions_hard.jsonl --label hard_baseline
 
 Metrics
     Retrieval hit rate   an expected article is in the retrieved results (in-scope questions)
@@ -18,6 +19,7 @@ Metrics
 
 import argparse
 import json
+import os
 import sys
 import time
 from datetime import datetime
@@ -33,8 +35,8 @@ QUESTIONS_FILE = ROOT / "eval" / "questions.jsonl"
 RESULTS_DIR = ROOT / "eval" / "results"
 
 
-def load_questions() -> list[dict]:
-    with QUESTIONS_FILE.open(encoding="utf-8") as f:
+def load_questions(path: Path = QUESTIONS_FILE) -> list[dict]:
+    with path.open(encoding="utf-8") as f:
         return [json.loads(line) for line in f if line.strip()]
 
 
@@ -51,10 +53,13 @@ def pct(numerator: int, denominator: int) -> float | None:
 
 
 def run_one(q: dict, provider, retrieval_only: bool) -> dict:
-    record = {"id": q["id"], "pair_id": q["pair_id"], "language": q["language"],
+    record = {"id": q["id"], "pair_id": q.get("pair_id"), "category": q.get("category"),
+              "language": q["language"],
               "in_scope": q["in_scope"], "expected_articles": q["expected_articles"],
               "question": q["question"]}
+    start = time.time()
     chunks = retrieve(q["question"])
+    record["retrieval_seconds"] = round(time.time() - start, 2)
     record["retrieved_articles_ranked"] = [c["article_number"] for c in chunks]
     record["first_hit_rank"] = first_hit_rank(chunks, q["expected_articles"]) if q["in_scope"] else None
 
@@ -79,8 +84,10 @@ def summarize(results: list[dict], retrieval_only: bool) -> dict:
         hits = [r for r in rows if r["first_hit_rank"] is not None]
         mrr = sum(1 / r["first_hit_rank"] for r in hits) / len(rows) if rows else None
         top1 = sum(1 for r in hits if r["first_hit_rank"] == 1)
+        times = [r["retrieval_seconds"] for r in rows if r.get("retrieval_seconds") is not None]
         return {"hit_rate": pct(len(hits), len(rows)), "top1_rate": pct(top1, len(rows)),
-                "mrr": round(mrr, 3) if mrr is not None else None}
+                "mrr": round(mrr, 3) if mrr is not None else None,
+                "avg_search_seconds": round(sum(times) / len(times), 2) if times else None}
 
     summary["retrieval"] = {"all": retrieval_metrics(in_scope)}
     for lang in ("en", "ar"):
@@ -121,6 +128,20 @@ def summarize(results: list[dict], retrieval_only: bool) -> dict:
     complete = [p for p in by_pair.values() if "en" in p and "ar" in p]
     agree = sum(1 for p in complete if set(p["en"]["cited_articles"]) & set(p["ar"]["cited_articles"]))
     summary["cross_lingual_agreement"] = pct(agree, len(complete))
+
+    categories = sorted({r["category"] for r in ok if r.get("category")})
+    if categories:
+        summary["by_category"] = {}
+        for cat in categories:
+            rows = [r for r in ok if r.get("category") == cat]
+            m = answer_metrics(rows)
+            summary["by_category"][cat] = {
+                "questions": len(rows),
+                "retrieval_hit_rate": retrieval_metrics([r for r in rows if r["in_scope"]])["hit_rate"]
+                                      if any(r["in_scope"] for r in rows) else None,
+                "citation_accuracy": m["citation_accuracy"],
+                "refusal_accuracy": m["refusal_accuracy"],
+            }
     return summary
 
 
@@ -129,13 +150,16 @@ def to_markdown(summary: dict, label: str, retrieval_only: bool) -> str:
         return "n/a" if v is None else f"{v}{unit}"
 
     lines = [f"## Evaluation: {label} ({'retrieval only' if retrieval_only else 'full pipeline'})",
-             f"_{datetime.now():%Y-%m-%d %H:%M}, {summary['questions']} questions "
+             f"_{datetime.now():%Y-%m-%d %H:%M}, {summary.get('questions_file', '')}, "
+             f"retrieval mode: {summary.get('retrieval_mode', 'n/a')}, {summary['questions']} questions "
              f"({summary['in_scope']} in scope, {summary['out_of_scope']} out of scope)_", "",
              "| Retrieval | All | English | Arabic |", "|---|---|---|---|"]
     r = summary["retrieval"]
     lines.append(f"| Hit rate (top 6) | {cell(r['all']['hit_rate'])} | {cell(r['en']['hit_rate'])} | {cell(r['ar']['hit_rate'])} |")
     lines.append(f"| Correct article ranked first | {cell(r['all']['top1_rate'])} | {cell(r['en']['top1_rate'])} | {cell(r['ar']['top1_rate'])} |")
     lines.append(f"| MRR | {cell(r['all']['mrr'], '')} | {cell(r['en']['mrr'], '')} | {cell(r['ar']['mrr'], '')} |")
+    lines.append(f"| Average search time | {cell(r['all']['avg_search_seconds'], 's')} | "
+                 f"{cell(r['en']['avg_search_seconds'], 's')} | {cell(r['ar']['avg_search_seconds'], 's')} |")
     if not retrieval_only:
         a = summary["answers"]
         lines += ["", "| Answers | All | English | Arabic |", "|---|---|---|---|"]
@@ -148,6 +172,12 @@ def to_markdown(summary: dict, label: str, retrieval_only: bool) -> str:
         lines += ["", f"Cross-lingual agreement (EN/AR pairs citing a common article): "
                       f"{cell(summary['cross_lingual_agreement'])}",
                   f"Questions that errored: {summary['errors']}"]
+        if summary.get("by_category"):
+            lines += ["", "| Category | Questions | Retrieval hit rate | Citation accuracy | Refusal accuracy |",
+                      "|---|---|---|---|---|"]
+            for cat, m in summary["by_category"].items():
+                lines.append(f"| {cat} | {m['questions']} | {cell(m['retrieval_hit_rate'])} | "
+                             f"{cell(m['citation_accuracy'])} | {cell(m['refusal_accuracy'])} |")
     return "\n".join(lines) + "\n"
 
 
@@ -159,8 +189,17 @@ def main() -> None:
                         help="seconds between Gemini calls (free tier allows about 5 per minute)")
     parser.add_argument("--resume", help="results .jsonl from an interrupted run; finished questions are skipped")
     parser.add_argument("--limit", type=int, help="only run the first N questions (for a quick test)")
+    parser.add_argument("--ids", help="comma-separated question ids to run, e.g. h11_en,h22_ar")
+    parser.add_argument("--retrieval-mode", choices=["vector", "vector_dedup", "rerank"],
+                        help="override RETRIEVAL_MODE from .env for this run")
+    parser.add_argument("--questions", default=str(QUESTIONS_FILE),
+                        help="question file, e.g. eval/questions_hard.jsonl")
     args = parser.parse_args()
 
+    if args.retrieval_mode:
+        os.environ["RETRIEVAL_MODE"] = args.retrieval_mode
+    retrieval_mode = os.getenv("RETRIEVAL_MODE", "rerank")
+    print(f"Retrieval mode: {retrieval_mode}")
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     mode = "retrieval" if args.retrieval_only else "full"
     results_path = Path(args.resume) if args.resume else RESULTS_DIR / f"{args.label}_{mode}.jsonl"
@@ -176,7 +215,12 @@ def main() -> None:
     elif results_path.exists():
         results_path.unlink()
 
-    questions = load_questions()[: args.limit] if args.limit else load_questions()
+    questions = load_questions(Path(args.questions))
+    if args.ids:
+        wanted = {i.strip() for i in args.ids.split(",")}
+        questions = [q for q in questions if q["id"] in wanted]
+    if args.limit:
+        questions = questions[: args.limit]
     provider = None if args.retrieval_only else get_provider()
 
     results = list(done.values())
@@ -196,6 +240,8 @@ def main() -> None:
             time.sleep(args.pause)
 
     summary = summarize(results, args.retrieval_only)
+    summary["retrieval_mode"] = retrieval_mode
+    summary["questions_file"] = Path(args.questions).name
     report = to_markdown(summary, args.label, args.retrieval_only)
     (RESULTS_DIR / f"{args.label}_{mode}_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     (RESULTS_DIR / f"{args.label}_{mode}_report.md").write_text(report, encoding="utf-8")

@@ -39,7 +39,7 @@ class FakeProvider:
 @pytest.fixture
 def client(monkeypatch):
     monkeypatch.setattr(generate, "retrieve", lambda question, top_k=6: FAKE_CHUNKS)
-    monkeypatch.setattr(api, "get_model", lambda: None)
+    monkeypatch.setattr(api, "warm_up", lambda: None)
 
     def make(answer):
         monkeypatch.setattr(api, "get_provider", lambda: FakeProvider(answer))

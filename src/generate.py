@@ -41,10 +41,15 @@ Rules:
 1. Use ONLY the articles provided in the user message. Never use outside knowledge.
 2. Cite the article number(s) your answer relies on in cited_articles.
 3. Write the answer in the language named in the user message.
-4. If the provided articles do not answer the question, set found to false,
+4. If the provided articles do not deal with the question's topic at all, set found to false,
    leave cited_articles empty, and say you could not find it in the law.
-5. Be concise and factual. Quote exact numbers (days, percentages, periods) from the text.
-6. The Arabic source text has some letters swapped by the PDF (for example
+5. If an article deals with the topic but does not contain the specific detail asked for
+   (for example an amount or a number of hours that the law leaves to the Cabinet or the
+   Executive Regulation), set found to true, cite that article, say clearly that the law
+   does not specify that detail, and explain who determines it according to the article.
+   Never supply the missing detail from outside knowledge.
+6. Be concise and factual. Quote exact numbers (days, percentages, periods) from the text.
+7. The Arabic source text has some letters swapped by the PDF (for example
    "عالقات" means "علاقات"). Read past this, and write correct Arabic in your answer."""
 
 

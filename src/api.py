@@ -17,7 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from generate import answer_question, get_provider
-from retrieve import DATABASE_URL, get_model
+from retrieve import DATABASE_URL, current_mode, get_model, warm_up
 
 log = logging.getLogger("api")
 
@@ -28,7 +28,7 @@ state: dict = {}
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     start = time.time()
-    get_model()                       # load bge-m3 into memory once (the slow part)
+    warm_up()                         # load bge-m3 (and the reranker) into memory once
     state["provider"] = get_provider()
     state["started_at"] = time.time()
     log.info("Startup complete in %.1fs", time.time() - start)
@@ -81,6 +81,7 @@ class HealthResponse(BaseModel):
     database: str
     chunks_indexed: int
     embedding_model_loaded: bool
+    retrieval_mode: str
     uptime_seconds: float
 
 
@@ -105,6 +106,7 @@ def health():
         database=db_status,
         chunks_indexed=count,
         embedding_model_loaded=model_loaded,
+        retrieval_mode=current_mode(),
         uptime_seconds=round(time.time() - state.get("started_at", time.time()), 1),
     )
 

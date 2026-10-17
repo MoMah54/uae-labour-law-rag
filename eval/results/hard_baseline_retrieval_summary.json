@@ -1,0 +1,22 @@
+{
+  "questions": 26,
+  "in_scope": 21,
+  "out_of_scope": 5,
+  "retrieval": {
+    "all": {
+      "hit_rate": 95.2,
+      "top1_rate": 81.0,
+      "mrr": 0.867
+    },
+    "en": {
+      "hit_rate": 90.9,
+      "top1_rate": 81.8,
+      "mrr": 0.836
+    },
+    "ar": {
+      "hit_rate": 100.0,
+      "top1_rate": 80.0,
+      "mrr": 0.9
+    }
+  }
+}

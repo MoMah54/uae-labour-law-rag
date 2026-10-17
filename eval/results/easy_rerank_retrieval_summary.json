@@ -1,0 +1,24 @@
+{
+  "questions": 50,
+  "in_scope": 44,
+  "out_of_scope": 6,
+  "retrieval": {
+    "all": {
+      "hit_rate": 100.0,
+      "top1_rate": 95.5,
+      "mrr": 0.973
+    },
+    "en": {
+      "hit_rate": 100.0,
+      "top1_rate": 95.5,
+      "mrr": 0.97
+    },
+    "ar": {
+      "hit_rate": 100.0,
+      "top1_rate": 95.5,
+      "mrr": 0.977
+    }
+  },
+  "retrieval_mode": "rerank",
+  "questions_file": "questions.jsonl"
+}
