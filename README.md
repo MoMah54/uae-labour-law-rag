@@ -1,5 +1,7 @@
 # UAE Labour Law Assistant (Arabic / English RAG)
 
+![Chat interface answering an Arabic question with cited sources](docs/screenshot.png)
+
 Ask questions about the UAE Labour Law in Arabic or English and get answers that cite the exact articles they are based on.
 
 This is a retrieval-augmented generation (RAG) system over **Federal Decree-Law No. 33 of 2021 Regulating Labour Relations**. It answers only from the text of the law, cites its sources, refuses questions the law does not cover, and is measured on a bilingual evaluation set.
