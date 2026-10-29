@@ -16,6 +16,7 @@ import random
 import re
 import sys
 import time
+from collections import OrderedDict
 from typing import Protocol
 
 from dotenv import load_dotenv
@@ -76,7 +77,13 @@ class GeminiProvider:
         api_key = os.getenv("GEMINI_API_KEY")
         if not api_key:
             sys.exit("GEMINI_API_KEY is missing from .env")
-        self.client = genai.Client(api_key=api_key)
+        # A per-request time limit, so a model that is slow (but not failing) gives up
+        # and we move to the next model instead of waiting minutes. Value is in milliseconds.
+        self.timeout_seconds = float(os.getenv("GEMINI_TIMEOUT_SECONDS", "25"))
+        self.client = genai.Client(
+            api_key=api_key,
+            http_options=types.HttpOptions(timeout=int(self.timeout_seconds * 1000)),
+        )
         self.types = types
         # GEMINI_MODEL can list several models, comma separated, best first.
         # If one is overloaded (503) or retired (404), the next one is tried.
@@ -109,8 +116,9 @@ class GeminiProvider:
                 return result
             except Exception as error:
                 code = getattr(error, "code", None)
-                if code in (404, 503) and model != self.models[-1]:
-                    log.warning("Model %s unavailable (%s). Falling back to next model.", model, code)
+                reason = "timed out" if is_timeout(error) else code
+                if (code in (404, 503) or is_timeout(error)) and model != self.models[-1]:
+                    log.warning("Model %s unavailable (%s). Falling back to next model.", model, reason)
                     last_error = error
                     continue
                 raise
@@ -134,8 +142,16 @@ def get_provider() -> LLMProvider:
 
 # ---------- Retry with exponential backoff ----------
 
+def is_timeout(error: Exception) -> bool:
+    if isinstance(error, TimeoutError):
+        return True
+    name = type(error).__name__.lower()
+    return "timeout" in name or "timed out" in str(error).lower()
+
 def is_retryable(error: Exception) -> bool:
-    """Rate limits (429) and temporary server errors (5xx) are worth retrying."""
+    """Rate limits (429), temporary server errors (5xx) and timeouts are worth retrying."""
+    if is_timeout(error):
+        return True
     code = getattr(error, "code", None) or getattr(error, "status_code", None)
     if isinstance(code, int):
         return code == 429 or code >= 500
@@ -189,15 +205,47 @@ def build_prompt(question: str, chunks: list[dict], language: str) -> str:
     return f"Answer language: {language_name}\n\nArticles:\n{context}\n\nQuestion: {question}"
 
 
+# ---------- Answer cache ----------
+# The law doesn't change while the app runs, so the same question always deserves the
+# same answer. Repeated questions (like the interface's examples) come back instantly.
+CACHE_SIZE = int(os.getenv("ANSWER_CACHE_SIZE", "256"))
+_answer_cache: "OrderedDict[str, dict]" = OrderedDict()
+
+
+def cache_key(question: str) -> str:
+    return " ".join(question.lower().split()).rstrip("?؟. ")
+
+
 def answer_question(question: str, provider: LLMProvider | None = None) -> dict:
+    key = cache_key(question)
+    if CACHE_SIZE > 0 and key in _answer_cache:
+        _answer_cache.move_to_end(key)
+        cached = dict(_answer_cache[key], question=question, cached=True,
+                      latency_seconds=0.0, search_seconds=0.0, llm_seconds=0.0)
+        log.info("q=%r served from cache", question[:60])
+        return cached
+
+    output = _answer_uncached(question, provider)
+    if CACHE_SIZE > 0:
+        _answer_cache[key] = output
+        if len(_answer_cache) > CACHE_SIZE:
+            _answer_cache.popitem(last=False)
+    return output
+
+
+def _answer_uncached(question: str, provider: LLMProvider | None = None) -> dict:
     start = time.time()
     provider = provider or get_provider()
     language = detect_language(question)
 
+    search_start = time.time()
     chunks = retrieve(question)
+    search_seconds = time.time() - search_start
     retrieved_articles = sorted({c["article_number"] for c in chunks})
 
+    llm_start = time.time()
     result = with_retries(lambda: provider.generate(SYSTEM_PROMPT, build_prompt(question, chunks, language)))
+    llm_seconds = time.time() - llm_start
 
     # Guard against invented citations: keep only articles we actually gave the model.
     cited = [a for a in result.cited_articles if a in retrieved_articles]
@@ -226,9 +274,13 @@ def answer_question(question: str, provider: LLMProvider | None = None) -> dict:
         "sources": sources,
         "provider": provider.name,
         "latency_seconds": round(time.time() - start, 2),
+        "search_seconds": round(search_seconds, 2),
+        "cached": False,
+        "llm_seconds": round(llm_seconds, 2),
     }
-    log.info("q=%r retrieved=%s cited=%s found=%s latency=%.2fs",
-             question[:60], retrieved_articles, output["cited_articles"], found, output["latency_seconds"])
+    log.info("q=%r retrieved=%s cited=%s found=%s latency=%.2fs (search %.2fs, llm %.2fs, %s)",
+             question[:60], retrieved_articles, output["cited_articles"], found, output["latency_seconds"],
+             search_seconds, llm_seconds, provider.name)
     return output
 
 

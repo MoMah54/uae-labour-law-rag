@@ -40,6 +40,7 @@ class FakeProvider:
 def client(monkeypatch):
     monkeypatch.setattr(generate, "retrieve", lambda question, top_k=6: FAKE_CHUNKS)
     monkeypatch.setattr(api, "warm_up", lambda: None)
+    generate._answer_cache.clear()          # each test starts with an empty answer cache
 
     def make(answer):
         monkeypatch.setattr(api, "get_provider", lambda: FakeProvider(answer))
@@ -99,3 +100,14 @@ def test_health_reports_database_down(client, monkeypatch):
         body = c.get("/health").json()
     assert body["status"] == "degraded"
     assert body["database"] == "unreachable"
+
+
+def test_repeated_question_is_served_from_cache(client):
+    answer = generate.Answer(answer="30 days per year.", cited_articles=[29], found=True)
+    with client(answer) as c:
+        first = c.post("/ask", json={"question": "How many days of annual leave?"}).json()
+        second = c.post("/ask", json={"question": "how many days of  annual leave"}).json()
+    assert first["cached"] is False
+    assert second["cached"] is True
+    assert second["answer"] == first["answer"]
+    assert second["latency_seconds"] == 0.0

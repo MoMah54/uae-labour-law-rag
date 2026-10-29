@@ -73,6 +73,9 @@ class AskResponse(BaseModel):
     sources: list[Source]
     provider: str
     latency_seconds: float
+    search_seconds: float | None = None
+    llm_seconds: float | None = None
+    cached: bool = False
     disclaimer: str = "This is general information from the UAE Labour Law, not legal advice."
 
 
