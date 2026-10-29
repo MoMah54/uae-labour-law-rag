@@ -16,7 +16,9 @@ This is a retrieval-augmented generation (RAG) system over **Federal Decree-Law 
 - **Grounded answers:** a citation guard drops any article the model cites that was not actually retrieved, and out-of-scope questions are refused instead of answered from general knowledge
 - **Two-stage retrieval:** vector search (bge-m3 + pgvector) followed by a cross-encoder reranker (bge-reranker-v2-m3)
 - **Measured:** 76 evaluation questions, with every change compared against a recorded baseline
-- **Resilient LLM layer:** structured output, model fallback chain, and retries with exponential backoff that respect rate limits
+- **Resilient LLM layer:** structured output, a model fallback chain, a per-request time limit, and retries with exponential backoff that respect rate limits
+- **Chat interface:** Streamlit app with right-to-left Arabic, cited articles, and an expandable panel showing the source text
+- **One-command setup:** database, API and interface run as three Docker containers with health checks
 
 ---
 
@@ -82,6 +84,16 @@ flowchart LR
 
 **Ingestion (offline):** official PDFs are split **by article** rather than by fixed size, embedded with bge-m3, and stored in pgvector with their article number, language and page.
 
+**Deployment:** three containers started by Docker Compose. The interface calls the API over HTTP, and the API reaches the database by its service name. Each container waits for the previous one to report healthy, and the models are stored in a volume so they download only once.
+
+```mermaid
+flowchart LR
+    U[Browser] -->|:8501| UI[ui<br/>Streamlit]
+    UI -->|HTTP /ask| API[api<br/>FastAPI + models]
+    API -->|SQL| DB[(db<br/>PostgreSQL + pgvector)]
+    API -->|HTTPS| G[Gemini API]
+```
+
 **Query time:** the question is embedded and the 10 nearest chunks are retrieved. A cross-encoder reranker reads the question together with each chunk and re-orders them, then the best chunk per article is kept (top 6). Gemini answers using only those articles and returns JSON (`answer`, `cited_articles`, `found`). Citations not present in the retrieved articles are dropped.
 
 ---
@@ -97,7 +109,7 @@ flowchart LR
 
 All 74 articles are recovered in both languages. The letter swaps did not measurably hurt retrieval (Arabic scored the same as English), and the model writes correct Arabic in its answers.
 
-**Why a reranker, and why a small candidate pool.** On the hard set, vector search confused *"leaving a job"* with *leave* in the holiday sense and missed Article 54 entirely. A cross-encoder reranker fixed this, but the first configuration (20 candidates, 512 tokens) took about 55 seconds per question and lost some questions it previously answered, because it promoted "answer-shaped" passages such as penalty articles full of AED amounts. Reducing to **10 candidates and 256 tokens** was both faster (about 15s) and more accurate: vector search provides a sensible shortlist, and the reranker orders it.
+**Why a reranker, and why a small candidate pool.** On the hard set, vector search confused *"leaving a job"* with *leave* in the holiday sense and missed Article 54 entirely. A cross-encoder reranker fixed this, but the first configuration (20 candidates, 512 tokens) took about 55 seconds per question and lost some questions it previously answered, because it promoted "answer-shaped" passages such as penalty articles full of AED amounts. Reducing to **10 candidates and 256 tokens** was both faster (about 15s) and more accurate: vector search provides a sensible shortlist, and the reranker orders it. Going further, to 128 tokens per chunk, lowered accuracy on the standard set (ranked first fell from 95.5% to 90.9%), so 256 was kept.
 
 | Hard set | Vector only | Rerank 20 × 512 | Rerank 10 × 256 |
 |---|---|---|---|
@@ -106,6 +118,10 @@ All 74 articles are recovered in both languages. The letter swaps did not measur
 | Search time per question | under 1s | about 55s | about 15s |
 
 **Refuse, but don't over-refuse.** A strict "refuse if the articles don't answer" rule caused the model to refuse *"What is the minimum wage in dirhams?"* even though Article 27 covers the topic. The prompt now separates "topic not in the law" (refuse) from "topic covered but the specific detail is not" (answer, cite, and say who determines the detail). The change was checked against the near-scope questions to confirm refusals still hold.
+
+**Finding where the time goes.** Answers sometimes took over two minutes, so every answer now reports its search time and model time separately, and `diagnose.py` times each step of search on its own. This found one clear cause and closed off a likely second one:
+- **`localhost` versus `127.0.0.1` on Windows (confirmed).** Embedding (0.2s) and reranking (about 9 to 15s) were fine, but every database connection took **130 seconds**. On Windows, `localhost` can resolve to the IPv6 address first, and the connection to the Docker container hung until it timed out and fell back to IPv4. Connecting to `127.0.0.1` directly removed the delay entirely.
+- **Slow model responses (prevented).** A slow but successful Gemini response could previously hold up an answer with no limit. Each call now has a 25-second limit, after which the next model in the chain is tried, and repeated questions are served instantly from an answer cache.
 
 **Free-tier constraints.** The Gemini free tier allows a few requests per minute per model, and newer models often return 503 under load. The client uses a fallback chain of models, honours the server's requested retry delay, and the evaluation script paces requests and can resume an interrupted run.
 
@@ -122,6 +138,8 @@ All 74 articles are recovered in both languages. The letter swaps did not measur
 | Vector database | PostgreSQL + pgvector, in Docker |
 | LLM | Google Gemini (provider layer designed for adding others) |
 | API | FastAPI + Pydantic |
+| Interface | Streamlit |
+| Packaging | Docker Compose (db, api, ui), CPU-only PyTorch |
 | Tests | pytest (no database, model or API key needed) |
 
 ---
@@ -139,6 +157,8 @@ uae-labour-law-rag/
 │   ├── retrieve.py          # vector search, deduplication, reranking
 │   ├── generate.py          # prompt, Gemini call, citation guard, retries
 │   └── api.py               # FastAPI app: /ask and /health
+├── ui/
+│   └── app.py               # Streamlit chat interface
 ├── eval/
 │   ├── questions.jsonl      # standard set (50)
 │   ├── questions_hard.jsonl # hard set (26)
@@ -146,17 +166,22 @@ uae-labour-law-rag/
 │   └── results/             # saved runs and reports
 ├── tests/
 │   └── test_api.py
-├── docker-compose.yml       # PostgreSQL + pgvector
-└── requirements.txt
+├── docker-compose.yml       # db, api and ui containers
+├── Dockerfile.api           # API image
+├── Dockerfile.ui            # interface image
+├── requirements.txt         # full local development environment
+├── requirements-api.txt     # API container dependencies
+├── requirements-ui.txt      # interface container dependencies
+└── diagnose.py              # times each step of search
 ```
 
 ---
 
 ## Getting started
 
-**Requirements:** Python 3.11+, Docker Desktop, and a free Gemini API key from [Google AI Studio](https://aistudio.google.com).
+**Requirements:** Docker Desktop, Python 3.11+ (to build the search index), and a free Gemini API key from [Google AI Studio](https://aistudio.google.com).
 
-**1. Install**
+**1. Clone and install**
 ```bash
 git clone https://github.com/MoMah54/uae-labour-law-rag.git
 cd uae-labour-law-rag
@@ -169,32 +194,44 @@ python -m pip install -r requirements.txt
 ```
 GEMINI_API_KEY=your-key
 GEMINI_MODEL=model-a,model-b          # comma-separated fallback chain
-DATABASE_URL=postgresql://postgres:postgres@localhost:5432/labour_law
+DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/labour_law   # use 127.0.0.1, not localhost
 RETRIEVAL_MODE=rerank                 # or vector for faster, less accurate search
 ```
 Run `python src/generate.py --list-models` to see which Gemini models your key can use.
 
 **3. Get the data:** download the law from the [UAE Legislation portal](https://uaelegislation.gov.ae/en/legislations/1541) in English and Arabic, and save the files as `data/raw/labour_law_en.pdf` and `data/raw/labour_law_ar.pdf`.
 
-**4. Build the index**
+**4. Build the search index** (once)
 ```bash
-docker compose up -d          # start PostgreSQL + pgvector
+docker compose up -d db       # start only the database
 python src/ingest.py          # extract and chunk by article
 python src/embed.py           # embed and load (first run downloads bge-m3)
 python src/embed.py --test    # sample searches in both languages
 ```
 
-**5. Ask questions**
+**5. Run the whole app**
+```bash
+docker compose up -d --build
+```
+The first start builds the images and downloads the models (about 4.5 GB), which takes a while. Follow it with `docker compose logs -f api`, and check with `docker compose ps` that the containers are healthy.
+
+- Chat interface: http://localhost:8501
+- API documentation: http://localhost:8000/docs
+
+Afterwards, `docker compose up -d` starts the app and `docker compose down` stops it. Data and models are kept.
+
+### Running without Docker (for development)
+
+With the database running (`docker compose up -d db`), start the API and the interface in two terminals:
+```bash
+uvicorn api:app --app-dir src --port 8000
+python -m streamlit run ui/app.py
+```
+Or ask from the command line:
 ```bash
 python src/generate.py "How many days of annual leave does an employee get?"
 python src/generate.py "كم يوم إجازة سنوية يستحق العامل؟"
 ```
-
-**6. Run the API**
-```bash
-uvicorn api:app --app-dir src --port 8000
-```
-Open http://localhost:8000/docs to try `POST /ask` and `GET /health` in the browser.
 
 ---
 
@@ -214,7 +251,7 @@ Options include `--retrieval-mode` (`vector`, `vector_dedup`, `rerank`), `--ids`
 
 ## Limitations
 
-- **Speed:** about 15 seconds of each answer is the reranker running on a laptop CPU. On a GPU it would take well under a second; `RETRIEVAL_MODE=vector` is much faster but less accurate on hard questions.
+- **Speed:** a typical answer takes about 20 seconds on a laptop CPU: about 15 seconds for the reranker and about 4 for Gemini. On a GPU the reranker would take well under a second. `RETRIEVAL_MODE=vector` is much faster but less accurate on hard questions, and repeated questions are answered instantly from the cache.
 - **Test set size:** 76 questions in total. On the hard set, one question changes a score by about 5 percentage points.
 - **Tuning bias:** the reranker settings were chosen using the hard set and confirmed on the standard set, so the hard-set score is somewhat optimistic.
 - **Expected citations are narrow:** some "imprecise" citations are related articles (for example citing the definitions article alongside the juveniles article), so citation precision understates answer quality.
@@ -230,9 +267,11 @@ Options include `--retrieval-mode` (`vector`, `vector_dedup`, `rerank`), `--ids`
 - [x] Cited answer generation with refusals and fallback
 - [x] FastAPI service with automated tests
 - [x] Bilingual evaluation (standard and hard sets) and reranker
-- [ ] Chat interface showing answers next to their sources
+- [x] Chat interface showing answers next to their sources
+- [x] Full application in Docker (database, API, interface)
+- [ ] CI with GitHub Actions
+- [ ] Cloud deployment
 - [ ] Repair of the Arabic source text for display
-- [ ] Full application in Docker, CI with GitHub Actions, and cloud deployment
 - [ ] Index the Executive Regulation
 
 ---
