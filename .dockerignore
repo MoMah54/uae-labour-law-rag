@@ -1,0 +1,11 @@
+# Keep images small and secrets out of them.
+.venv/
+.git/
+.env
+**/__pycache__/
+.pytest_cache/
+data/
+eval/
+tests/
+*.md
+diagnose.py

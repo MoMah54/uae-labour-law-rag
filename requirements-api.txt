@@ -1,0 +1,9 @@
+# Runtime dependencies for the API container (PyTorch is installed separately, CPU build).
+fastapi
+uvicorn
+pydantic
+python-dotenv
+sentence-transformers
+psycopg[binary]
+pgvector
+google-genai

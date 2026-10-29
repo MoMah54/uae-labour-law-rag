@@ -1,0 +1,3 @@
+# Runtime dependencies for the chat interface container.
+streamlit
+requests

@@ -1,3 +1,11 @@
+# Starts the whole app: database, API and chat interface.
+#   docker compose up -d --build     first time, or after changing code
+#   docker compose up -d             afterwards
+#   docker compose logs -f api       watch the API's log
+#   docker compose down              stop everything (data is kept)
+#
+# Then open http://localhost:8501 for the chat, or http://localhost:8000/docs for the API.
+
 services:
   db:
     image: pgvector/pgvector:pg16
@@ -7,10 +15,56 @@ services:
       POSTGRES_PASSWORD: postgres   # local development only
       POSTGRES_DB: labour_law
     ports:
-      - "5432:5432"
+      - "5432:5432"                 # still reachable from your own scripts (ingest, embed, eval)
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d labour_law"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: labour_law_api
+    env_file: .env                  # GEMINI_API_KEY, GEMINI_MODEL, RETRIEVAL_MODE, ...
+    environment:
+      # Inside Docker, the database is reached by its service name, not 127.0.0.1.
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/labour_law
+      # Allow the first start to download the models into the "models" volume.
+      HF_HUB_OFFLINE: "0"
+    volumes:
+      - models:/models              # bge-m3 and the reranker (~4.5 GB), downloaded once
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 600s            # the first start downloads the models, which takes a while
+    restart: unless-stopped
+
+  ui:
+    build:
+      context: .
+      dockerfile: Dockerfile.ui
+    container_name: labour_law_ui
+    environment:
+      API_URL: http://api:8000
+    ports:
+      - "8501:8501"
+    depends_on:
+      api:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:
   pgdata:
+  models:

@@ -1,0 +1,18 @@
+# API image: FastAPI + embedding model + reranker + Gemini client.
+FROM python:3.13-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    HF_HOME=/models
+
+WORKDIR /app
+
+# The CPU-only build of PyTorch is about 5x smaller than the default (which bundles CUDA).
+COPY requirements-api.txt .
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu \
+ && pip install --no-cache-dir -r requirements-api.txt
+
+COPY src/ ./src/
+
+EXPOSE 8000
+CMD ["uvicorn", "api:app", "--app-dir", "src", "--host", "0.0.0.0", "--port", "8000"]
