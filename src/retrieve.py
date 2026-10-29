@@ -27,7 +27,7 @@ import psycopg  # noqa: E402
 from pgvector.psycopg import register_vector  # noqa: E402
 from sentence_transformers import CrossEncoder, SentenceTransformer  # noqa: E402
 
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/labour_law")
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@127.0.0.1:5432/labour_law")
 MODEL_NAME = "BAAI/bge-m3"
 RERANKER_NAME = os.getenv("RERANKER_MODEL", "BAAI/bge-reranker-v2-m3")
 DEFAULT_TOP_K = 6

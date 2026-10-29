@@ -20,7 +20,7 @@ from pgvector.psycopg import register_vector
 from sentence_transformers import SentenceTransformer
 
 load_dotenv()
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/labour_law")
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@127.0.0.1:5432/labour_law")
 CHUNKS_FILE = Path("data/processed/chunks.jsonl")
 MODEL_NAME = "BAAI/bge-m3"
 EMBEDDING_DIM = 1024

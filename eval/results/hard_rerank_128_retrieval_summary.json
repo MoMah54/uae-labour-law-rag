@@ -1,0 +1,27 @@
+{
+  "questions": 26,
+  "in_scope": 21,
+  "out_of_scope": 5,
+  "retrieval": {
+    "all": {
+      "hit_rate": 100.0,
+      "top1_rate": 85.7,
+      "mrr": 0.898,
+      "avg_search_seconds": 135.33
+    },
+    "en": {
+      "hit_rate": 100.0,
+      "top1_rate": 81.8,
+      "mrr": 0.867,
+      "avg_search_seconds": 135.86
+    },
+    "ar": {
+      "hit_rate": 100.0,
+      "top1_rate": 90.0,
+      "mrr": 0.933,
+      "avg_search_seconds": 134.73
+    }
+  },
+  "retrieval_mode": "rerank",
+  "questions_file": "questions_hard.jsonl"
+}
